@@ -174,6 +174,7 @@ Route::prefix('v1')->middleware(['auth:sanctum', 'admin'])->group(function () {
     Route::put('admin/orders/{id}', [AdminOrderController::class, 'update']);
     Route::post('admin/orders/{id}/cancel', [AdminOrderController::class, 'cancel']);
     Route::post('admin/orders/{id}/refund', [AdminOrderController::class, 'processRefund']);
+    Route::get('admin/orders/{id}/refund-info', [AdminOrderController::class, 'getRefundInfo']);
     Route::get('admin/orders/statistics', [AdminOrderController::class, 'statistics']);
     Route::get('admin/orders/status/{status}', [AdminOrderController::class, 'byStatus']);
     Route::get('admin/orders/analytics/report', [AdminOrderController::class, 'analyticsReport']);

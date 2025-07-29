@@ -597,28 +597,27 @@ class OrderController extends Controller
                 'reason' => 'nullable|string|max:500',
             ]);
 
-            // Update order status to refunded
-            $order->update([
-                'status' => 'refunded',
-                'refunded_at' => now(),
-                'metadata' => array_merge($order->metadata ?? [], [
-                    'refund_amount' => $request->refund_amount,
-                    'refund_reference' => $request->refund_reference,
-                    'refund_reason' => $request->input('reason'),
-                    'refunded_by' => auth()->id(),
-                ]),
-            ]);
-
-            // Send refund notification
-            $this->orderService->sendRefundNotification(
+            // Process refund through OrderService
+            $refundResult = $this->orderService->processRefund(
                 $order,
+                $request->refund_amount,
                 $request->refund_reference,
-                $request->refund_amount
+                $request->input('reason')
             );
+
+            if (!$refundResult['success']) {
+                return response()->json([
+                    'success' => false,
+                    'message' => $refundResult['message']
+                ], 400);
+            }
 
             return response()->json([
                 'success' => true,
-                'data' => $order->fresh(),
+                'data' => [
+                    'order' => $order->fresh(),
+                    'refund_details' => $refundResult,
+                ],
                 'message' => 'Refund processed successfully'
             ]);
 
@@ -626,6 +625,46 @@ class OrderController extends Controller
             return response()->json([
                 'success' => false,
                 'message' => 'Error processing refund',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Get refund information for an order.
+     */
+    public function getRefundInfo(string $id): JsonResponse
+    {
+        try {
+            $order = Order::find($id);
+
+            if (!$order) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Order not found'
+                ], 404);
+            }
+
+            $refundInfo = [
+                'can_be_refunded' => $order->canBeRefunded(),
+                'can_be_partially_refunded' => $this->orderService->canPartiallyRefund($order),
+                'max_refundable_amount' => $this->orderService->getMaxRefundableAmount($order),
+                'refund_history' => $this->orderService->getRefundHistory($order),
+                'order_status' => $order->status,
+                'total_amount' => $order->total_amount,
+                'currency' => $order->currency,
+            ];
+
+            return response()->json([
+                'success' => true,
+                'data' => $refundInfo,
+                'message' => 'Refund information retrieved successfully'
+            ]);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Error retrieving refund information',
                 'error' => $e->getMessage()
             ], 500);
         }

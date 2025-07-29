@@ -15,18 +15,17 @@ use App\Services\ActivityService;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
+use App\Services\Payment\PaymentService;
 
 class OrderService
 {
-    protected $receiptService;
-
     /**
      * Create a new class instance.
      */
-    public function __construct(ReceiptService $receiptService)
-    {
-        $this->receiptService = $receiptService;
-    }
+    public function __construct(
+        private ReceiptService $receiptService,
+        private PaymentService $paymentService
+    ) {}
 
     /**
      * Create an order from a successful payment.
@@ -133,6 +132,11 @@ class OrderService
         try {
             DB::beginTransaction();
 
+            // Check if order can be cancelled
+            if (!$order->canBeCancelled()) {
+                throw new \Exception('Order cannot be cancelled in its current status');
+            }
+
             $order->update([
                 'status' => 'cancelled',
                 'cancelled_at' => now(),
@@ -143,9 +147,36 @@ class OrderService
             ]);
 
             // If there's a payment, initiate refund
-            if ($order->payment) {
-                // TODO: Integrate with payment service for refund
-                Log::info('Order cancelled, refund initiated for payment: ' . $order->payment->payment_reference);
+            if ($order->payment && $order->payment->isSuccessful()) {
+                $refundResult = $this->initiateRefund($order, $reason);
+                
+                if ($refundResult['success']) {
+                    // Update order with refund information
+                    $order->update([
+                        'status' => 'refunded',
+                        'refunded_at' => now(),
+                        'metadata' => array_merge($order->metadata ?? [], [
+                            'refund_reference' => $refundResult['refund_reference'],
+                            'refund_amount' => $refundResult['refund_amount'],
+                            'refund_reason' => $reason,
+                            'refunded_by' => auth()->id(),
+                        ]),
+                    ]);
+
+                    // Send refund notification
+                    $this->sendRefundNotification($order, $refundResult['refund_reference'], $refundResult['refund_amount']);
+                } else {
+                    // Log refund failure but still cancel the order
+                    Log::error('Refund failed for order: ' . $order->id . ' - ' . $refundResult['message']);
+                    
+                    // Update order metadata with refund failure
+                    $order->update([
+                        'metadata' => array_merge($order->metadata ?? [], [
+                            'refund_failed' => true,
+                            'refund_error' => $refundResult['message'],
+                        ]),
+                    ]);
+                }
             }
 
             // Send order cancellation notification
@@ -159,6 +190,240 @@ class OrderService
             Log::error('Error cancelling order: ' . $e->getMessage());
             return false;
         }
+    }
+
+    /**
+     * Process refund for an order.
+     */
+    public function processRefund(Order $order, float $refundAmount, string $refundReference, string $reason = null): array
+    {
+        try {
+            DB::beginTransaction();
+
+            // Validate refund amount
+            if ($refundAmount > $order->total_amount) {
+                throw new \Exception('Refund amount cannot exceed order total');
+            }
+
+            if ($refundAmount <= 0) {
+                throw new \Exception('Refund amount must be greater than zero');
+            }
+
+            // Check if order can be refunded
+            if (!$order->canBeRefunded()) {
+                throw new \Exception('Order cannot be refunded in its current status');
+            }
+
+            // If there's a payment, process refund through payment gateway
+            if ($order->payment && $order->payment->isSuccessful()) {
+                $refundResult = $this->processPaymentRefund($order, $refundAmount, $refundReference, $reason);
+                
+                if (!$refundResult['success']) {
+                    throw new \Exception('Payment refund failed: ' . $refundResult['message']);
+                }
+            }
+
+            // Update order status
+            $order->update([
+                'status' => 'refunded',
+                'refunded_at' => now(),
+                'metadata' => array_merge($order->metadata ?? [], [
+                    'refund_amount' => $refundAmount,
+                    'refund_reference' => $refundReference,
+                    'refund_reason' => $reason,
+                    'refunded_by' => auth()->id(),
+                    'refund_processed_at' => now(),
+                ]),
+            ]);
+
+            // Send refund notification
+            $this->sendRefundNotification($order, $refundReference, $refundAmount);
+
+            DB::commit();
+
+            return [
+                'success' => true,
+                'refund_reference' => $refundReference,
+                'refund_amount' => $refundAmount,
+                'message' => 'Refund processed successfully',
+            ];
+
+        } catch (\Exception $e) {
+            DB::rollBack();
+            Log::error('Error processing refund: ' . $e->getMessage());
+            
+            return [
+                'success' => false,
+                'message' => $e->getMessage(),
+            ];
+        }
+    }
+
+    /**
+     * Initiate refund through payment gateway.
+     */
+    private function initiateRefund(Order $order, string $reason = null): array
+    {
+        try {
+            if (!$order->payment) {
+                return [
+                    'success' => false,
+                    'message' => 'No payment associated with this order',
+                ];
+            }
+
+            $refundAmount = $order->total_amount;
+            $refundReference = 'REF_' . time() . '_' . $order->id;
+
+            return $this->processPaymentRefund($order, $refundAmount, $refundReference, $reason);
+
+        } catch (\Exception $e) {
+            Log::error('Error initiating refund: ' . $e->getMessage());
+            return [
+                'success' => false,
+                'message' => $e->getMessage(),
+            ];
+        }
+    }
+
+    /**
+     * Process refund through payment gateway.
+     */
+    private function processPaymentRefund(Order $order, float $refundAmount, string $refundReference, string $reason = null): array
+    {
+        try {
+            $payment = $order->payment;
+            
+            if (!$payment) {
+                return [
+                    'success' => false,
+                    'message' => 'No payment associated with this order',
+                ];
+            }
+
+            // Get the appropriate gateway service
+            $gatewayService = $this->paymentService->getGatewayService($payment->gateway_name);
+            
+            if (!$gatewayService) {
+                return [
+                    'success' => false,
+                    'message' => 'Payment gateway service not found',
+                ];
+            }
+
+            // Process refund through gateway
+            $refundResult = $gatewayService->processRefund($payment, $refundAmount, $refundReference, $reason);
+
+            if ($refundResult['success']) {
+                // Update payment status
+                $payment->update([
+                    'status' => 'refunded',
+                    'metadata' => array_merge($payment->metadata ?? [], [
+                        'refund_amount' => $refundAmount,
+                        'refund_reference' => $refundReference,
+                        'refund_reason' => $reason,
+                        'refunded_at' => now(),
+                    ]),
+                ]);
+
+                // Log refund activity
+                ActivityService::log(
+                    'payment_refunded',
+                    $order->user_id,
+                    'App\Models\Payment',
+                    $payment->id,
+                    [
+                        'order_id' => $order->id,
+                        'order_number' => $order->order_number,
+                        'refund_amount' => $refundAmount,
+                        'refund_reference' => $refundReference,
+                        'gateway_name' => $payment->gateway_name,
+                    ]
+                );
+            }
+
+            return $refundResult;
+
+        } catch (\Exception $e) {
+            Log::error('Error processing payment refund: ' . $e->getMessage());
+            return [
+                'success' => false,
+                'message' => $e->getMessage(),
+            ];
+        }
+    }
+
+    /**
+     * Get refund history for an order.
+     */
+    public function getRefundHistory(Order $order): array
+    {
+        try {
+            $refunds = [];
+
+            if ($order->payment) {
+                // Get refund information from payment metadata
+                $paymentMetadata = $order->payment->metadata ?? [];
+                
+                if (isset($paymentMetadata['refund_amount'])) {
+                    $refunds[] = [
+                        'refund_reference' => $paymentMetadata['refund_reference'] ?? 'N/A',
+                        'refund_amount' => $paymentMetadata['refund_amount'],
+                        'refund_reason' => $paymentMetadata['refund_reason'] ?? 'N/A',
+                        'refunded_at' => $paymentMetadata['refunded_at'] ?? $order->refunded_at?->format('Y-m-d H:i:s'),
+                        'gateway_name' => $order->payment->gateway_name,
+                        'status' => 'completed',
+                    ];
+                }
+            }
+
+            return $refunds;
+
+        } catch (\Exception $e) {
+            Log::error('Error getting refund history: ' . $e->getMessage());
+            return [];
+        }
+    }
+
+    /**
+     * Check if order can be partially refunded.
+     */
+    public function canPartiallyRefund(Order $order): bool
+    {
+        // Check if order is completed and has successful payment
+        if ($order->status !== 'completed' || !$order->payment || !$order->payment->isSuccessful()) {
+            return false;
+        }
+
+        // Check if already refunded
+        if ($order->status === 'refunded') {
+            return false;
+        }
+
+        // Check if payment gateway supports partial refunds
+        $gatewayService = $this->paymentService->getGatewayService($order->payment->gateway_name);
+        
+        return $gatewayService && method_exists($gatewayService, 'supportsPartialRefund') 
+            ? $gatewayService->supportsPartialRefund() 
+            : false;
+    }
+
+    /**
+     * Get maximum refundable amount for an order.
+     */
+    public function getMaxRefundableAmount(Order $order): float
+    {
+        if (!$order->canBeRefunded()) {
+            return 0;
+        }
+
+        // If already partially refunded, calculate remaining amount
+        $alreadyRefunded = 0;
+        if ($order->payment && isset($order->payment->metadata['refund_amount'])) {
+            $alreadyRefunded = $order->payment->metadata['refund_amount'];
+        }
+
+        return max(0, $order->total_amount - $alreadyRefunded);
     }
 
     /**

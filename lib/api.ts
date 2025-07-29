@@ -88,6 +88,46 @@ export interface PaginatedResponse<T> {
   total: number;
 }
 
+// Order Types
+export interface OrderItem {
+  id: number;
+  book_id: number;
+  price: number;
+  quantity: number;
+  title: string;
+  author?: string;
+  cover_image?: string;
+  metadata?: any;
+}
+
+export interface Order {
+  id: number;
+  order_number: string;
+  user_id: number;
+  payment_id?: number;
+  total_amount: number;
+  currency: string;
+  status: string;
+  metadata?: any;
+  completed_at?: string;
+  cancelled_at?: string;
+  refunded_at?: string;
+  created_at: string;
+  updated_at: string;
+  items: OrderItem[];
+  receipt?: any;
+}
+
+export interface OrderNotification {
+  id: number;
+  type: string;
+  title: string;
+  message: string;
+  data?: any;
+  read_at?: string;
+  created_at: string;
+}
+
 // API Client
 class ApiClient {
   private baseURL: string;
@@ -215,6 +255,43 @@ class ApiClient {
     const response = await this.request<Book[]>('/books/new-releases');
     return response.data;
   }
+
+  // Orders
+  async getOrders(): Promise<ApiResponse<Order[]>> {
+    return this.request<Order[]>('/orders');
+  }
+
+  async getOrder(orderId: number | string): Promise<ApiResponse<Order>> {
+    return this.request<Order>(`/orders/${orderId}`);
+  }
+
+  async cancelOrder(orderId: number | string, reason?: string): Promise<ApiResponse<any>> {
+    return this.request<any>(`/orders/${orderId}/cancel`, {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
+    });
+  }
+
+  async getOrderReceipt(orderId: number | string): Promise<ApiResponse<any>> {
+    return this.request<any>(`/orders/${orderId}/receipt`);
+  }
+
+  async downloadOrderReceipt(orderId: number | string): Promise<ApiResponse<any>> {
+    return this.request<any>(`/orders/${orderId}/receipt/download`);
+  }
+
+  // Order Notifications
+  async getOrderNotifications(): Promise<ApiResponse<OrderNotification[]>> {
+    return this.request<OrderNotification[]>('/orders/notifications');
+  }
+
+  async markOrderNotificationAsRead(notificationId: number | string): Promise<ApiResponse<any>> {
+    return this.request<any>(`/orders/notifications/${notificationId}/read`, { method: 'POST' });
+  }
+
+  async getUnreadOrderNotificationsCount(): Promise<ApiResponse<{ count: number }>> {
+    return this.request<{ count: number }>(`/orders/notifications/unread-count`);
+  }
 }
 
 // Create and export API client instance
@@ -253,5 +330,13 @@ export const useApi = () => {
     getFeaturedBooks: apiClient.getFeaturedBooks.bind(apiClient),
     getBestsellers: apiClient.getBestsellers.bind(apiClient),
     getNewReleases: apiClient.getNewReleases.bind(apiClient),
+    getOrders: apiClient.getOrders.bind(apiClient),
+    getOrder: apiClient.getOrder.bind(apiClient),
+    cancelOrder: apiClient.cancelOrder.bind(apiClient),
+    getOrderReceipt: apiClient.getOrderReceipt.bind(apiClient),
+    downloadOrderReceipt: apiClient.downloadOrderReceipt.bind(apiClient),
+    getOrderNotifications: apiClient.getOrderNotifications.bind(apiClient),
+    markOrderNotificationAsRead: apiClient.markOrderNotificationAsRead.bind(apiClient),
+    getUnreadOrderNotificationsCount: apiClient.getUnreadOrderNotificationsCount.bind(apiClient),
   };
 }; 

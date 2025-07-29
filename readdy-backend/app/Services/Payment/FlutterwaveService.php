@@ -311,4 +311,79 @@ class FlutterwaveService implements GatewayServiceInterface
             'payment_id' => $payment->id,
         ];
     }
+
+    /**
+     * Process refund for a payment.
+     */
+    public function processRefund(Payment $payment, float $refundAmount, string $refundReference, string $reason = null): array
+    {
+        try {
+            $gateway = PaymentGateway::where('name', 'flutterwave')->first();
+            
+            if (!$gateway) {
+                return [
+                    'success' => false,
+                    'message' => 'Flutterwave gateway not configured',
+                ];
+            }
+
+            $config = $gateway->metadata;
+            $secretKey = $config['secret_key'] ?? null;
+
+            if (!$secretKey) {
+                return [
+                    'success' => false,
+                    'message' => 'Flutterwave secret key not configured',
+                ];
+            }
+
+            // Prepare refund data
+            $refundData = [
+                'transaction_id' => $payment->gateway_reference,
+                'amount' => $refundAmount,
+                'currency' => $payment->currency,
+                'reason' => $reason ?? 'Customer request',
+            ];
+
+            // Make API call to Flutterwave
+            $response = Http::withHeaders([
+                'Authorization' => 'Bearer ' . $secretKey,
+                'Content-Type' => 'application/json',
+            ])->post('https://api.flutterwave.com/v3/refunds', $refundData);
+
+            $responseData = $response->json();
+
+            if ($response->successful() && $responseData['status'] === 'success') {
+                return [
+                    'success' => true,
+                    'refund_reference' => $refundReference,
+                    'refund_amount' => $refundAmount,
+                    'gateway_refund_id' => $responseData['data']['id'] ?? null,
+                    'message' => 'Refund processed successfully',
+                    'gateway_response' => $responseData,
+                ];
+            } else {
+                return [
+                    'success' => false,
+                    'message' => $responseData['message'] ?? 'Refund failed',
+                    'gateway_response' => $responseData,
+                ];
+            }
+
+        } catch (\Exception $e) {
+            Log::error('Flutterwave refund error: ' . $e->getMessage());
+            return [
+                'success' => false,
+                'message' => 'Refund processing failed: ' . $e->getMessage(),
+            ];
+        }
+    }
+
+    /**
+     * Check if gateway supports partial refunds.
+     */
+    public function supportsPartialRefund(): bool
+    {
+        return true; // Flutterwave supports partial refunds
+    }
 } 

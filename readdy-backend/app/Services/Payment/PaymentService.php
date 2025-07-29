@@ -231,27 +231,115 @@ class PaymentService
     /**
      * Get available payment gateways.
      */
-    public function getAvailableGateways(string $currency = 'NGN'): array
+    public function getAvailableGateways(): array
     {
-        $gateways = PaymentGateway::active()
-            ->byPriority()
+        return PaymentGateway::where('is_active', true)
+            ->select(['id', 'name', 'display_name', 'description', 'supported_currencies', 'metadata'])
             ->get()
-            ->filter(function ($gateway) use ($currency) {
-                return $gateway->supportsCurrency($currency);
-            })
-            ->map(function ($gateway) {
+            ->toArray();
+    }
+
+    /**
+     * Get gateway service instance.
+     */
+    public function getGatewayService(string $gatewayName): ?GatewayServiceInterface
+    {
+        return match ($gatewayName) {
+            'flutterwave' => app(FlutterwaveService::class),
+            'paystack' => app(PayStackService::class),
+            default => null,
+        };
+    }
+
+    /**
+     * Process refund through payment gateway.
+     */
+    public function processRefund(Payment $payment, float $refundAmount, string $refundReference, string $reason = null): array
+    {
+        try {
+            $gatewayService = $this->getGatewayService($payment->gateway_name);
+            
+            if (!$gatewayService) {
                 return [
-                    'name' => $gateway->name,
-                    'display_name' => $gateway->display_name,
-                    'description' => $gateway->description,
-                    'supported_payment_methods' => $gateway->supported_payment_methods,
-                    'is_test_mode' => $gateway->is_test_mode,
+                    'success' => false,
+                    'message' => 'Payment gateway service not found',
+                ];
+            }
+
+            // Check if gateway supports refunds
+            if (!method_exists($gatewayService, 'processRefund')) {
+                return [
+                    'success' => false,
+                    'message' => 'Payment gateway does not support refunds',
+                ];
+            }
+
+            // Process refund through gateway
+            $refundResult = $gatewayService->processRefund($payment, $refundAmount, $refundReference, $reason);
+
+            // Log refund attempt
+            PaymentLog::create([
+                'payment_id' => $payment->id,
+                'action' => 'refund_attempt',
+                'status' => $refundResult['success'] ? 'success' : 'failed',
+                'gateway_name' => $payment->gateway_name,
+                'gateway_reference' => $refundReference,
+                'amount' => $refundAmount,
+                'currency' => $payment->currency,
+                'metadata' => [
+                    'reason' => $reason,
+                    'gateway_response' => $refundResult,
+                ],
+            ]);
+
+            return $refundResult;
+
+        } catch (\Exception $e) {
+            Log::error('Error processing refund: ' . $e->getMessage());
+            
+            // Log refund failure
+            PaymentLog::create([
+                'payment_id' => $payment->id,
+                'action' => 'refund_attempt',
+                'status' => 'failed',
+                'gateway_name' => $payment->gateway_name,
+                'gateway_reference' => $refundReference,
+                'amount' => $refundAmount,
+                'currency' => $payment->currency,
+                'metadata' => [
+                    'reason' => $reason,
+                    'error' => $e->getMessage(),
+                ],
+            ]);
+
+            return [
+                'success' => false,
+                'message' => $e->getMessage(),
+            ];
+        }
+    }
+
+    /**
+     * Get refund history for a payment.
+     */
+    public function getRefundHistory(Payment $payment): array
+    {
+        return PaymentLog::where('payment_id', $payment->id)
+            ->where('action', 'refund_attempt')
+            ->orderBy('created_at', 'desc')
+            ->get()
+            ->map(function ($log) {
+                return [
+                    'refund_reference' => $log->gateway_reference,
+                    'amount' => $log->amount,
+                    'currency' => $log->currency,
+                    'status' => $log->status,
+                    'reason' => $log->metadata['reason'] ?? null,
+                    'processed_at' => $log->created_at->format('Y-m-d H:i:s'),
+                    'gateway_response' => $log->metadata['gateway_response'] ?? null,
                 ];
             })
-            ->values()
             ->toArray();
-
-        return $gateways;
     }
 
     /**
@@ -292,18 +380,6 @@ class PaymentService
             'recent_revenue' => $recentRevenue,
             'success_rate' => $totalPayments > 0 ? round(($successfulPayments / $totalPayments) * 100, 2) : 0,
         ];
-    }
-
-    /**
-     * Get gateway service instance.
-     */
-    private function getGatewayService(string $gatewayName): GatewayServiceInterface
-    {
-        return match($gatewayName) {
-            'flutterwave' => new FlutterwaveService(),
-            'paystack' => new PayStackService(),
-            default => throw new \Exception("Unsupported payment gateway: {$gatewayName}"),
-        };
     }
 
     /**
