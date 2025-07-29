@@ -21,6 +21,8 @@ use App\Http\Controllers\Api\V1\Admin\OrderController as AdminOrderController;
 use App\Http\Controllers\Api\V1\CouponController;
 use App\Http\Controllers\Api\V1\Admin\CouponController as AdminCouponController;
 use App\Http\Controllers\Api\V1\CouponCampaignController;
+use App\Http\Controllers\Api\V1\DeliveryController;
+use App\Http\Controllers\Api\V1\Admin\DeliveryController as AdminDeliveryController;
 
 /*
 |--------------------------------------------------------------------------
@@ -163,6 +165,14 @@ Route::prefix('v1')->middleware('auth:sanctum')->group(function () {
     Route::delete('/coupons/remove', [CouponController::class, 'remove']);
     Route::get('/coupons/history', [CouponController::class, 'history']);
     Route::get('/coupons/{code}', [CouponController::class, 'show']);
+
+    // Delivery routes
+    Route::get('/delivery/history', [DeliveryController::class, 'history']);
+    Route::get('/delivery/{orderId}', [DeliveryController::class, 'show']);
+    Route::get('/delivery/{orderId}/download/{bookId}', [DeliveryController::class, 'download']);
+    Route::post('/delivery/confirm-download', [DeliveryController::class, 'confirmDownload']);
+    Route::get('/delivery/statistics', [DeliveryController::class, 'statistics']);
+    Route::post('/delivery/{orderId}/retry', [DeliveryController::class, 'requestRetry']);
 });
 
 // Admin routes
