@@ -18,6 +18,9 @@ use App\Http\Controllers\Api\V1\PaymentController;
 use App\Http\Controllers\Api\V1\OrderController;
 use App\Http\Controllers\Api\V1\Admin\BookController as AdminBookController;
 use App\Http\Controllers\Api\V1\Admin\OrderController as AdminOrderController;
+use App\Http\Controllers\Api\V1\CouponController;
+use App\Http\Controllers\Api\V1\Admin\CouponController as AdminCouponController;
+use App\Http\Controllers\Api\V1\CouponCampaignController;
 
 /*
 |--------------------------------------------------------------------------
@@ -152,6 +155,14 @@ Route::prefix('v1')->middleware('auth:sanctum')->group(function () {
     Route::get('/orders/notifications', [OrderController::class, 'notifications']);
     Route::post('/orders/notifications/{notificationId}/read', [OrderController::class, 'markNotificationAsRead']);
     Route::get('/orders/notifications/unread-count', [OrderController::class, 'unreadNotificationsCount']);
+
+    // Coupon routes
+    Route::get('/coupons', [CouponController::class, 'index']);
+    Route::post('/coupons/validate', [CouponController::class, 'validate']);
+    Route::post('/coupons/apply', [CouponController::class, 'apply']);
+    Route::delete('/coupons/remove', [CouponController::class, 'remove']);
+    Route::get('/coupons/history', [CouponController::class, 'history']);
+    Route::get('/coupons/{code}', [CouponController::class, 'show']);
 });
 
 // Admin routes
@@ -179,4 +190,22 @@ Route::prefix('v1')->middleware(['auth:sanctum', 'admin'])->group(function () {
     Route::get('admin/orders/status/{status}', [AdminOrderController::class, 'byStatus']);
     Route::get('admin/orders/analytics/report', [AdminOrderController::class, 'analyticsReport']);
     Route::get('admin/orders/export', [AdminOrderController::class, 'exportReport']);
+
+    // Admin coupon routes
+    Route::get('admin/coupons', [AdminCouponController::class, 'index']);
+    Route::post('admin/coupons', [AdminCouponController::class, 'store']);
+    Route::get('admin/coupons/{id}', [AdminCouponController::class, 'show']);
+    Route::put('admin/coupons/{id}', [AdminCouponController::class, 'update']);
+    Route::delete('admin/coupons/{id}', [AdminCouponController::class, 'destroy']);
+    Route::get('admin/coupons/analytics', [AdminCouponController::class, 'analytics']);
+    Route::post('admin/coupons/bulk-create', [AdminCouponController::class, 'bulkCreate']);
+    Route::get('admin/coupons/statistics', [AdminCouponController::class, 'statistics']);
+
+    // Admin campaign routes
+    Route::get('admin/campaigns', [CouponCampaignController::class, 'index']);
+    Route::post('admin/campaigns', [CouponCampaignController::class, 'store']);
+    Route::get('admin/campaigns/{id}', [CouponCampaignController::class, 'show']);
+    Route::put('admin/campaigns/{id}', [CouponCampaignController::class, 'update']);
+    Route::delete('admin/campaigns/{id}', [CouponCampaignController::class, 'destroy']);
+    Route::get('admin/campaigns/{id}/performance', [CouponCampaignController::class, 'performance']);
 }); 

@@ -110,4 +110,20 @@ class User extends Authenticatable
                     ->withPivot('added_at', 'notes')
                     ->withTimestamps();
     }
+
+    /**
+     * Get the user's coupon usage history.
+     */
+    public function couponUsages()
+    {
+        return $this->hasMany(CouponUsage::class);
+    }
+
+    /**
+     * Get the user's orders.
+     */
+    public function orders()
+    {
+        return $this->hasMany(Order::class);
+    }
 }
