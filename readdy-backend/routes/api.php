@@ -15,7 +15,9 @@ use App\Http\Controllers\Api\V1\ReviewController;
 use App\Http\Controllers\Api\V1\WishlistController;
 use App\Http\Controllers\Api\V1\NotificationController;
 use App\Http\Controllers\Api\V1\PaymentController;
+use App\Http\Controllers\Api\V1\OrderController;
 use App\Http\Controllers\Api\V1\Admin\BookController as AdminBookController;
+use App\Http\Controllers\Api\V1\Admin\OrderController as AdminOrderController;
 
 /*
 |--------------------------------------------------------------------------
@@ -137,6 +139,19 @@ Route::prefix('v1')->middleware('auth:sanctum')->group(function () {
     Route::get('/payments/history', [PaymentController::class, 'history']);
     Route::get('/payments/{paymentId}', [PaymentController::class, 'show']);
     Route::post('/payments/{paymentId}/retry', [PaymentController::class, 'retry']);
+
+    // Order routes
+    Route::get('/orders', [OrderController::class, 'index']);
+    Route::get('/orders/{orderId}', [OrderController::class, 'show']);
+    Route::post('/orders/{orderId}/cancel', [OrderController::class, 'cancel']);
+    Route::get('/orders/{orderId}/status-history', [OrderController::class, 'statusHistory']);
+    Route::get('/orders/{orderId}/receipt', [OrderController::class, 'receipt']);
+    Route::get('/orders/{orderId}/receipt/download', [OrderController::class, 'downloadReceipt']);
+    
+    // Order notification routes
+    Route::get('/orders/notifications', [OrderController::class, 'notifications']);
+    Route::post('/orders/notifications/{notificationId}/read', [OrderController::class, 'markNotificationAsRead']);
+    Route::get('/orders/notifications/unread-count', [OrderController::class, 'unreadNotificationsCount']);
 });
 
 // Admin routes
@@ -152,4 +167,15 @@ Route::prefix('v1')->middleware(['auth:sanctum', 'admin'])->group(function () {
 
     // Admin payment routes
     Route::get('admin/payments/statistics', [PaymentController::class, 'statistics']);
+
+    // Admin order routes
+    Route::get('admin/orders', [AdminOrderController::class, 'index']);
+    Route::get('admin/orders/{id}', [AdminOrderController::class, 'show']);
+    Route::put('admin/orders/{id}', [AdminOrderController::class, 'update']);
+    Route::post('admin/orders/{id}/cancel', [AdminOrderController::class, 'cancel']);
+    Route::post('admin/orders/{id}/refund', [AdminOrderController::class, 'processRefund']);
+    Route::get('admin/orders/statistics', [AdminOrderController::class, 'statistics']);
+    Route::get('admin/orders/status/{status}', [AdminOrderController::class, 'byStatus']);
+    Route::get('admin/orders/analytics/report', [AdminOrderController::class, 'analyticsReport']);
+    Route::get('admin/orders/export', [AdminOrderController::class, 'exportReport']);
 }); 

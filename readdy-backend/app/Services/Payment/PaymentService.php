@@ -7,12 +7,20 @@ use App\Models\PaymentGateway;
 use App\Models\PaymentLog;
 use App\Models\User;
 use App\Models\Book;
+use App\Services\OrderService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\DB;
 
 class PaymentService
 {
+    protected $orderService;
+
+    public function __construct(OrderService $orderService)
+    {
+        $this->orderService = $orderService;
+    }
+
     /**
      * Initialize a new payment.
      */
@@ -160,6 +168,9 @@ class PaymentService
                 
                 // Add book to user's library
                 $this->addBookToLibrary($payment->user_id, $payment->book_id);
+
+                // Create order from successful payment
+                $this->orderService->createOrderFromPayment($payment);
 
                 // Log successful payment
                 $this->logPaymentActivity(
