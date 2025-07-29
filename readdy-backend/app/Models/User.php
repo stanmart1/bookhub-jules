@@ -126,4 +126,44 @@ class User extends Authenticatable
     {
         return $this->hasMany(Order::class);
     }
+
+    /**
+     * Get the user's reading sessions.
+     */
+    public function readingSessions()
+    {
+        return $this->hasMany(ReadingSession::class);
+    }
+
+    /**
+     * Get the user's preferences.
+     */
+    public function preferences()
+    {
+        return $this->hasOne(UserPreference::class);
+    }
+
+    /**
+     * Get the user's reading goals.
+     */
+    public function readingGoals()
+    {
+        return $this->hasMany(ReadingGoal::class);
+    }
+
+    /**
+     * Get the user's notifications.
+     */
+    public function notifications()
+    {
+        return $this->hasMany(Notification::class);
+    }
+
+    /**
+     * Get the user's activity logs.
+     */
+    public function activityLogs()
+    {
+        return $this->hasMany(ActivityLog::class);
+    }
 }

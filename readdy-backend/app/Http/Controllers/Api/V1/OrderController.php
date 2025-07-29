@@ -7,6 +7,8 @@ use Illuminate\Http\Request;
 use App\Services\OrderService;
 use Illuminate\Http\JsonResponse;
 use App\Services\ReceiptService;
+use Illuminate\Support\Facades\Log;
+use App\Models\Order;
 
 class OrderController extends Controller
 {
@@ -75,45 +77,61 @@ class OrderController extends Controller
     /**
      * Cancel an order.
      */
-    public function cancel(Request $request, int $orderId): JsonResponse
+    public function cancel(Request $request, Order $order): JsonResponse
     {
         try {
-            $order = $this->orderService->getOrderDetails($orderId, $request->user());
+            $request->validate([
+                'reason' => 'nullable|string|max:500',
+            ]);
 
-            if (!$order) {
+            $user = $request->user();
+            
+            // Check if user owns this order
+            if ($order->user_id !== $user->id) {
                 return response()->json([
                     'success' => false,
-                    'message' => 'Order not found'
-                ], 404);
+                    'message' => 'Unauthorized access to this order'
+                ], 403);
             }
 
-            if ($order->status !== 'pending' && $order->status !== 'processing') {
+            // Check if order can be cancelled
+            if (!$order->canBeCancelled()) {
                 return response()->json([
                     'success' => false,
                     'message' => 'Order cannot be cancelled in its current status'
                 ], 400);
             }
 
-            $reason = $request->input('reason');
-            $cancelled = $this->orderService->cancelOrder($order, $reason);
+            $orderService = app(OrderService::class);
+            $cancelled = $orderService->cancelOrder($order, $request->reason);
 
-            if (!$cancelled) {
+            if ($cancelled) {
+                // Send cancellation email
+                $orderService->sendOrderCancellationEmail($order, $request->reason);
+                
+                return response()->json([
+                    'success' => true,
+                    'message' => 'Order cancelled successfully',
+                    'data' => [
+                        'order_id' => $order->id,
+                        'order_number' => $order->order_number,
+                        'status' => $order->status,
+                        'cancelled_at' => $order->cancelled_at,
+                    ]
+                ]);
+            } else {
                 return response()->json([
                     'success' => false,
                     'message' => 'Failed to cancel order'
                 ], 500);
             }
 
-            return response()->json([
-                'success' => true,
-                'message' => 'Order cancelled successfully'
-            ]);
-
         } catch (\Exception $e) {
+            Log::error('Error cancelling order: ' . $e->getMessage());
             return response()->json([
                 'success' => false,
                 'message' => 'Error cancelling order',
-                'error' => $e->getMessage()
+                'errors' => ['order' => ['An error occurred while cancelling the order.']]
             ], 500);
         }
     }

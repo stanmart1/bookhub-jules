@@ -16,6 +16,12 @@ use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use App\Services\Payment\PaymentService;
+use App\Mail\OrderConfirmation;
+use App\Mail\OrderCancellation;
+use App\Mail\RefundProcessed;
+use App\Mail\DeliveryNotification;
+use App\Mail\DownloadReminder;
+use Illuminate\Support\Facades\Mail;
 
 class OrderService
 {
@@ -70,6 +76,12 @@ class OrderService
 
             // Send order confirmation notification
             $this->sendOrderConfirmationNotification($order);
+            
+            // Send order confirmation email
+            $this->sendOrderConfirmationEmail($order);
+            
+            // Process digital delivery
+            $this->processDigitalDelivery($order);
 
             DB::commit();
             return $order;
@@ -888,6 +900,191 @@ class OrderService
 
         } catch (\Exception $e) {
             Log::error('Error sending refund notification: ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * Send order confirmation email.
+     */
+    public function sendOrderConfirmationEmail(Order $order): void
+    {
+        try {
+            $order->load(['user', 'items.book']);
+            
+            Mail::to($order->user->email)->send(new OrderConfirmation($order));
+            
+            Log::info('Order confirmation email sent', [
+                'order_id' => $order->id,
+                'order_number' => $order->order_number,
+                'user_email' => $order->user->email,
+            ]);
+        } catch (\Exception $e) {
+            Log::error('Error sending order confirmation email: ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * Send order cancellation email.
+     */
+    public function sendOrderCancellationEmail(Order $order, string $reason = null): void
+    {
+        try {
+            $order->load(['user']);
+            
+            Mail::to($order->user->email)->send(new OrderCancellation($order, $reason));
+            
+            Log::info('Order cancellation email sent', [
+                'order_id' => $order->id,
+                'order_number' => $order->order_number,
+                'user_email' => $order->user->email,
+                'reason' => $reason,
+            ]);
+        } catch (\Exception $e) {
+            Log::error('Error sending order cancellation email: ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * Send refund processed email.
+     */
+    public function sendRefundProcessedEmail(Order $order, array $refundInfo = []): void
+    {
+        try {
+            $order->load(['user']);
+            
+            Mail::to($order->user->email)->send(new RefundProcessed($order, $refundInfo));
+            
+            Log::info('Refund processed email sent', [
+                'order_id' => $order->id,
+                'order_number' => $order->order_number,
+                'user_email' => $order->user->email,
+                'refund_amount' => $refundInfo['refund_amount'] ?? null,
+            ]);
+        } catch (\Exception $e) {
+            Log::error('Error sending refund processed email: ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * Send delivery notification email.
+     */
+    public function sendDeliveryNotificationEmail(Order $order, array $deliveredItems = []): void
+    {
+        try {
+            $order->load(['user', 'items.book']);
+            
+            Mail::to($order->user->email)->send(new DeliveryNotification($order, $deliveredItems));
+            
+            Log::info('Delivery notification email sent', [
+                'order_id' => $order->id,
+                'order_number' => $order->order_number,
+                'user_email' => $order->user->email,
+                'delivered_items_count' => count($deliveredItems),
+            ]);
+        } catch (\Exception $e) {
+            Log::error('Error sending delivery notification email: ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * Send download reminder email.
+     */
+    public function sendDownloadReminderEmail(Order $order, array $undownloadedItems = []): void
+    {
+        try {
+            $order->load(['user', 'items.book']);
+            
+            Mail::to($order->user->email)->send(new DownloadReminder($order, $undownloadedItems));
+            
+            Log::info('Download reminder email sent', [
+                'order_id' => $order->id,
+                'order_number' => $order->order_number,
+                'user_email' => $order->user->email,
+                'undownloaded_items_count' => count($undownloadedItems),
+            ]);
+        } catch (\Exception $e) {
+            Log::error('Error sending download reminder email: ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * Process digital delivery for an order.
+     */
+    public function processDigitalDelivery(Order $order): void
+    {
+        try {
+            $order->load(['items.book.bookFile']);
+            
+            $deliveredItems = [];
+            
+            foreach ($order->items as $item) {
+                if ($item->book && $item->book->bookFile) {
+                    $deliveredItems[] = [
+                        'book_id' => $item->book_id,
+                        'book' => $item->book,
+                        'order_item' => $item,
+                    ];
+                }
+            }
+            
+            if (!empty($deliveredItems)) {
+                // Send delivery notification email
+                $this->sendDeliveryNotificationEmail($order, $deliveredItems);
+                
+                // Log delivery activity
+                ActivityService::log(
+                    'digital_delivery_processed',
+                    $order->user_id,
+                    'App\Models\Order',
+                    $order->id,
+                    [
+                        'order_number' => $order->order_number,
+                        'delivered_items_count' => count($deliveredItems),
+                    ]
+                );
+            }
+        } catch (\Exception $e) {
+            Log::error('Error processing digital delivery: ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * Schedule download reminders for orders.
+     */
+    public function scheduleDownloadReminders(): void
+    {
+        try {
+            // Find orders that are 3 days old and haven't been fully downloaded
+            $orders = Order::with(['user', 'items.book.bookFile'])
+                ->where('status', 'completed')
+                ->where('created_at', '<=', now()->subDays(3))
+                ->where('created_at', '>', now()->subDays(7)) // Only orders from last 7 days
+                ->get();
+            
+            foreach ($orders as $order) {
+                $undownloadedItems = [];
+                
+                foreach ($order->items as $item) {
+                    if ($item->book && $item->book->bookFile) {
+                        // Check if book has been downloaded (this would need a download tracking system)
+                        $downloadCount = 0; // This would come from download tracking
+                        
+                        if ($downloadCount === 0) {
+                            $undownloadedItems[] = [
+                                'book_id' => $item->book_id,
+                                'book' => $item->book,
+                                'order_item' => $item,
+                            ];
+                        }
+                    }
+                }
+                
+                if (!empty($undownloadedItems)) {
+                    $this->sendDownloadReminderEmail($order, $undownloadedItems);
+                }
+            }
+        } catch (\Exception $e) {
+            Log::error('Error scheduling download reminders: ' . $e->getMessage());
         }
     }
 }

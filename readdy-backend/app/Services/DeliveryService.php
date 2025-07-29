@@ -10,6 +10,8 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
+use Illuminate\Support\Facades\Mail;
+use App\Services\ActivityService;
 
 class DeliveryService
 {
@@ -422,5 +424,198 @@ class DeliveryService
             'total_retried' => count($failedOrders),
             'results' => $results
         ];
+    }
+
+    /**
+     * Get download statistics for a user.
+     */
+    public function getDownloadStats(int $userId, string $period = '30'): array
+    {
+        try {
+            $startDate = now()->subDays($period);
+            
+            $totalDownloads = DownloadLog::where('user_id', $userId)
+                ->where('created_at', '>=', $startDate)
+                ->count();
+            
+            $uniqueBooksDownloaded = DownloadLog::where('user_id', $userId)
+                ->where('created_at', '>=', $startDate)
+                ->distinct('book_id')
+                ->count('book_id');
+            
+            $totalDownloadSize = DownloadLog::where('user_id', $userId)
+                ->where('created_at', '>=', $startDate)
+                ->sum('file_size');
+            
+            $averageDownloadTime = DownloadLog::where('user_id', $userId)
+                ->where('created_at', '>=', $startDate)
+                ->whereNotNull('download_duration')
+                ->avg('download_duration');
+            
+            return [
+                'total_downloads' => $totalDownloads,
+                'unique_books_downloaded' => $uniqueBooksDownloaded,
+                'total_download_size' => $totalDownloadSize,
+                'average_download_time' => round($averageDownloadTime, 2),
+                'period_days' => $period,
+            ];
+        } catch (\Exception $e) {
+            Log::error('Error getting download stats: ' . $e->getMessage());
+            return [];
+        }
+    }
+
+    /**
+     * Send delivery notification email.
+     */
+    public function sendDeliveryNotificationEmail(Order $order, array $deliveredItems = []): void
+    {
+        try {
+            $order->load(['user', 'items.book.bookFile']);
+            
+            Mail::to($order->user->email)->send(new \App\Mail\DeliveryNotification($order, $deliveredItems));
+            
+            Log::info('Delivery notification email sent', [
+                'order_id' => $order->id,
+                'order_number' => $order->order_number,
+                'user_email' => $order->user->email,
+                'delivered_items_count' => count($deliveredItems),
+            ]);
+        } catch (\Exception $e) {
+            Log::error('Error sending delivery notification email: ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * Send download reminder email.
+     */
+    public function sendDownloadReminderEmail(Order $order, array $undownloadedItems = []): void
+    {
+        try {
+            $order->load(['user', 'items.book.bookFile']);
+            
+            Mail::to($order->user->email)->send(new \App\Mail\DownloadReminder($order, $undownloadedItems));
+            
+            Log::info('Download reminder email sent', [
+                'order_id' => $order->id,
+                'order_number' => $order->order_number,
+                'user_email' => $order->user->email,
+                'undownloaded_items_count' => count($undownloadedItems),
+            ]);
+        } catch (\Exception $e) {
+            Log::error('Error sending download reminder email: ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * Process delivery notifications for an order.
+     */
+    public function processDeliveryNotifications(Order $order): void
+    {
+        try {
+            $order->load(['items.book.bookFile']);
+            
+            $deliveredItems = [];
+            
+            foreach ($order->items as $item) {
+                if ($item->book && $item->book->bookFile) {
+                    $deliveredItems[] = [
+                        'book_id' => $item->book_id,
+                        'book' => $item->book,
+                        'order_item' => $item,
+                    ];
+                }
+            }
+            
+            if (!empty($deliveredItems)) {
+                // Send delivery notification email
+                $this->sendDeliveryNotificationEmail($order, $deliveredItems);
+                
+                // Send in-app notification
+                ActivityService::notify(
+                    $order->user_id,
+                    'delivery_ready',
+                    'Books Ready for Download',
+                    "Your purchased books are ready for download! Click here to access your digital library.",
+                    [
+                        'order_id' => $order->id,
+                        'order_number' => $order->order_number,
+                        'delivered_items_count' => count($deliveredItems),
+                        'action_url' => route('api.v1.orders.show', $order->id),
+                    ]
+                );
+                
+                // Log delivery activity
+                ActivityService::log(
+                    'digital_delivery_ready',
+                    $order->user_id,
+                    'App\Models\Order',
+                    $order->id,
+                    [
+                        'order_number' => $order->order_number,
+                        'delivered_items_count' => count($deliveredItems),
+                    ]
+                );
+            }
+        } catch (\Exception $e) {
+            Log::error('Error processing delivery notifications: ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * Schedule download reminders for orders.
+     */
+    public function scheduleDownloadReminders(): void
+    {
+        try {
+            // Find orders that are 3 days old and haven't been fully downloaded
+            $orders = Order::with(['user', 'items.book.bookFile'])
+                ->where('status', 'completed')
+                ->where('created_at', '<=', now()->subDays(3))
+                ->where('created_at', '>', now()->subDays(7)) // Only orders from last 7 days
+                ->get();
+            
+            foreach ($orders as $order) {
+                $undownloadedItems = [];
+                
+                foreach ($order->items as $item) {
+                    if ($item->book && $item->book->bookFile) {
+                        // Check if book has been downloaded
+                        $downloadCount = DownloadLog::where('user_id', $order->user_id)
+                            ->where('book_id', $item->book_id)
+                            ->where('order_id', $order->id)
+                            ->count();
+                        
+                        if ($downloadCount === 0) {
+                            $undownloadedItems[] = [
+                                'book_id' => $item->book_id,
+                                'book' => $item->book,
+                                'order_item' => $item,
+                            ];
+                        }
+                    }
+                }
+                
+                if (!empty($undownloadedItems)) {
+                    $this->sendDownloadReminderEmail($order, $undownloadedItems);
+                    
+                    // Send in-app reminder notification
+                    ActivityService::notify(
+                        $order->user_id,
+                        'download_reminder',
+                        'Download Reminder',
+                        "Don't forget to download your purchased books! Your download links are still active.",
+                        [
+                            'order_id' => $order->id,
+                            'order_number' => $order->order_number,
+                            'undownloaded_items_count' => count($undownloadedItems),
+                            'action_url' => route('api.v1.orders.show', $order->id),
+                        ]
+                    );
+                }
+            }
+        } catch (\Exception $e) {
+            Log::error('Error scheduling download reminders: ' . $e->getMessage());
+        }
     }
 }

@@ -9,6 +9,7 @@ use App\Models\Order;
 use Illuminate\Http\JsonResponse;
 use Carbon\Carbon;
 use App\Models\OrderItem;
+use Illuminate\Support\Facades\Log;
 
 class OrderController extends Controller
 {
@@ -538,94 +539,106 @@ class OrderController extends Controller
     }
 
     /**
-     * Cancel an order.
+     * Cancel an order (admin).
      */
-    public function cancel(Request $request, string $id): JsonResponse
+    public function cancel(Request $request, Order $order): JsonResponse
     {
         try {
-            $order = Order::find($id);
+            $request->validate([
+                'reason' => 'required|string|max:500',
+            ]);
 
-            if (!$order) {
+            $orderService = app(OrderService::class);
+            $cancelled = $orderService->cancelOrder($order, $request->reason);
+
+            if ($cancelled) {
+                // Send cancellation email
+                $orderService->sendOrderCancellationEmail($order, $request->reason);
+                
                 return response()->json([
-                    'success' => false,
-                    'message' => 'Order not found'
-                ], 404);
-            }
-
-            $reason = $request->input('reason');
-            $cancelled = $this->orderService->cancelOrder($order, $reason);
-
-            if (!$cancelled) {
+                    'success' => true,
+                    'message' => 'Order cancelled successfully',
+                    'data' => [
+                        'order_id' => $order->id,
+                        'order_number' => $order->order_number,
+                        'status' => $order->status,
+                        'cancelled_at' => $order->cancelled_at,
+                        'cancellation_reason' => $request->reason,
+                    ]
+                ]);
+            } else {
                 return response()->json([
                     'success' => false,
                     'message' => 'Failed to cancel order'
                 ], 500);
             }
 
-            return response()->json([
-                'success' => true,
-                'message' => 'Order cancelled successfully'
-            ]);
-
         } catch (\Exception $e) {
+            Log::error('Error cancelling order (admin): ' . $e->getMessage());
             return response()->json([
                 'success' => false,
                 'message' => 'Error cancelling order',
-                'error' => $e->getMessage()
+                'errors' => ['order' => ['An error occurred while cancelling the order.']]
             ], 500);
         }
     }
 
     /**
-     * Process refund for an order.
+     * Process refund for an order (admin).
      */
-    public function processRefund(Request $request, string $id): JsonResponse
+    public function processRefund(Request $request, Order $order): JsonResponse
     {
         try {
-            $order = Order::find($id);
-
-            if (!$order) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Order not found'
-                ], 404);
-            }
-
             $request->validate([
-                'refund_amount' => 'required|numeric|min:0|max:' . $order->total_amount,
-                'refund_reference' => 'required|string|max:255',
-                'reason' => 'nullable|string|max:500',
+                'refund_amount' => 'required|numeric|min:0.01|max:' . $order->total_amount,
+                'refund_reason' => 'required|string|max:500',
+                'refund_reference' => 'nullable|string|max:100',
             ]);
 
-            // Process refund through OrderService
-            $refundResult = $this->orderService->processRefund(
-                $order,
-                $request->refund_amount,
-                $request->refund_reference,
-                $request->input('reason')
-            );
+            $orderService = app(OrderService::class);
+            
+            $refundAmount = $request->refund_amount;
+            $refundReference = $request->refund_reference ?? 'REF_' . time() . '_' . $order->id;
+            
+            $result = $orderService->processRefund($order, $refundAmount, $refundReference, $request->refund_reason);
 
-            if (!$refundResult['success']) {
+            if ($result['success']) {
+                // Send refund processed email
+                $refundInfo = [
+                    'refund_amount' => $refundAmount,
+                    'refund_reference' => $refundReference,
+                    'refund_reason' => $request->refund_reason,
+                    'refund_method' => $order->payment?->gateway_name ?? 'Original payment method',
+                    'processing_time' => '3-5 business days',
+                ];
+                
+                $orderService->sendRefundProcessedEmail($order, $refundInfo);
+                
+                return response()->json([
+                    'success' => true,
+                    'message' => 'Refund processed successfully',
+                    'data' => [
+                        'order_id' => $order->id,
+                        'order_number' => $order->order_number,
+                        'refund_amount' => $refundAmount,
+                        'refund_reference' => $refundReference,
+                        'refund_reason' => $request->refund_reason,
+                        'status' => $order->status,
+                    ]
+                ]);
+            } else {
                 return response()->json([
                     'success' => false,
-                    'message' => $refundResult['message']
-                ], 400);
+                    'message' => 'Failed to process refund: ' . $result['message']
+                ], 500);
             }
-
-            return response()->json([
-                'success' => true,
-                'data' => [
-                    'order' => $order->fresh(),
-                    'refund_details' => $refundResult,
-                ],
-                'message' => 'Refund processed successfully'
-            ]);
 
         } catch (\Exception $e) {
+            Log::error('Error processing refund (admin): ' . $e->getMessage());
             return response()->json([
                 'success' => false,
                 'message' => 'Error processing refund',
-                'error' => $e->getMessage()
+                'errors' => ['refund' => ['An error occurred while processing the refund.']]
             ], 500);
         }
     }

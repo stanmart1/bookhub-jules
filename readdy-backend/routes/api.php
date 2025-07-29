@@ -218,4 +218,29 @@ Route::prefix('v1')->middleware(['auth:sanctum', 'admin'])->group(function () {
     Route::put('admin/campaigns/{id}', [CouponCampaignController::class, 'update']);
     Route::delete('admin/campaigns/{id}', [CouponCampaignController::class, 'destroy']);
     Route::get('admin/campaigns/{id}/performance', [CouponCampaignController::class, 'performance']);
+
+    // Admin Analytics Routes
+    Route::prefix('analytics')->group(function () {
+        Route::get('/dashboard', [App\Http\Controllers\Api\V1\Admin\AnalyticsController::class, 'getDashboardAnalytics']);
+        Route::get('/real-time', [App\Http\Controllers\Api\V1\Admin\AnalyticsController::class, 'getRealTimeAnalytics']);
+        Route::get('/users', [App\Http\Controllers\Api\V1\Admin\AnalyticsController::class, 'getUserAnalytics']);
+        Route::get('/reading', [App\Http\Controllers\Api\V1\Admin\AnalyticsController::class, 'getReadingAnalytics']);
+        Route::get('/content', [App\Http\Controllers\Api\V1\Admin\AnalyticsController::class, 'getContentAnalytics']);
+        Route::get('/sales', [App\Http\Controllers\Api\V1\Admin\AnalyticsController::class, 'getSalesAnalytics']);
+        Route::get('/revenue', [App\Http\Controllers\Api\V1\Admin\AnalyticsController::class, 'getRevenueAnalytics']);
+        Route::get('/comprehensive', [App\Http\Controllers\Api\V1\Admin\AnalyticsController::class, 'comprehensiveReport']);
+        Route::get('/dashboard-summary', [App\Http\Controllers\Api\V1\Admin\AnalyticsController::class, 'dashboardSummary']);
+    });
+
+    // Admin Reporting Routes
+    Route::prefix('reports')->group(function () {
+        Route::get('/sales', [App\Http\Controllers\Api\V1\Admin\ReportingController::class, 'salesReport']);
+        Route::get('/delivery', [App\Http\Controllers\Api\V1\Admin\ReportingController::class, 'deliveryReport']);
+        Route::get('/customer', [App\Http\Controllers\Api\V1\Admin\ReportingController::class, 'customerReport']);
+        Route::post('/export', [App\Http\Controllers\Api\V1\Admin\ReportingController::class, 'exportReport']);
+        Route::get('/download', [App\Http\Controllers\Api\V1\Admin\ReportingController::class, 'downloadReport']);
+        Route::post('/scheduled', [App\Http\Controllers\Api\V1\Admin\ReportingController::class, 'scheduledReport']);
+        Route::get('/types', [App\Http\Controllers\Api\V1\Admin\ReportingController::class, 'getReportTypes']);
+        Route::get('/history', [App\Http\Controllers\Api\V1\Admin\ReportingController::class, 'getReportHistory']);
+    });
 }); 
